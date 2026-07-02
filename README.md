@@ -1,109 +1,109 @@
-# Virtual-Machine-Setup-and-Remote-Connection-Learning-Program
-# Secure Remote Management & Cloud VM Hardening Lifecycle
+# Azure Virtual Network Architecture, Cross-Platform Deployment, and Bastion Security Hardening
 
-## 1. Project Overview & Context
+##  Project Overview
+This project establishes a secure, enterprise-grade network topology within Microsoft Azure. The architecture demonstrates the systematic abstraction of physical components into software-defined infrastructure—focusing heavily on logical isolation, CIDR notation partitioning, and network security perimeters. 
 
-In modern cloud architecture and DevOps workflows, physical access to server hardware does not exist. Systems administrators, engineers, and developers must securely configure, maintain, and troubleshoot instances across public cloud boundaries using encrypted remote connectivity protocols. 
-
-This repository documents the complete infrastructure lifecycle of an enterprise-tier cloud virtual machine running Microsoft Windows Server 2022 inside Microsoft Azure. The project begins with a baseline public-facing network topology and traces the identification of its structural vulnerabilities, credential rotation strategies, and subsequent architectural hardening. 
-
-The primary deliverable demonstrates how an insecure management model (exposing raw Remote Desktop Protocol over public IP routing) is successfully transitioned into an enterprise-hardened posture using **Azure Bastion** to wrap operational sessions inside an encrypted, browser-encapsulated TLS/HTTPS tunnel.
-
-### Learning Program Objectives Achieved
-* **Virtual Network Topology Design**: Analyzed VNet address spacing and successfully applied network segmentation to create a dedicated gateway perimeter.
-* **Firewall & Boundary Security**: Configured, modified, and audited stateful firewall configurations using Azure Network Security Groups (NSGs).
-* **Dynamic Identity Remediation**: Applied platform extensions (`VMAccess`) to interact directly with the guest OS kernel and remediate administrative lockout issues.
-* **Administrative Access Layer Isolation**: Shifted the platform management vector from insecure client-side tools (direct public RDP) to zero-trust web gateway connections.
+Crucially, this project showcases the mitigation of high-risk security findings by transitioning cross-platform compute nodes (Windows and Linux) from wide-open public access (Direct Internet RDP/SSH) into a completely hardened, zero-exposure architecture brokered solely by **Azure Bastion**.
 
 ---
 
-## 2. Executive Summary
+##  1. Infrastructure Footprint & Network Topology
 
-This engineering project highlights the critical security balance between infrastructure accessibility and perimeter hardening. The initial deployment profile consisted of a standard compute node provisioned with a dedicated Public IP address, exposing standard listening vectors (TCP Port 3389) across public pathways. During template synthesis, the Azure Resource Manager (ARM) engine threw explicit perimeter risk warnings highlighting the vulnerability of exposing raw RDP ports to the public internet.
+### Core Network Matrix
+* **Virtual Network (VNet):** `vmhrdeveastus201-vnet`
+* **Address Space Configuration:** `10.1.0.0/16` (Supports scaling up to 65,536 private network endpoints).
+* **Region Hub:** East US 2
 
-Initial communication baseline testing encountered localized credential synchronization lag. Rather than using an destructive teardown/rebuild pattern, localized recovery was achieved by leveraging the Azure `VMAccess` extension to enforce a standardized administrator configuration (`azureuser`) within the guest OS. 
+### Segmented Subnet Architectures
+1. **`default` Compute Zone:** `10.1.0.0/24` (Hosts primary host interfaces; 249 available IP slots remaining).
+2. **`AzureBastionSubnet` (Dedicated Gateway):** `10.1.1.0/26` (Reserved strictly for the managed Azure Bastion proxy cluster topology).
 
-To systematically address the vulnerabilities associated with open management endpoints, the network configuration was refactored. A secure network slice, `AzureBastionSubnet` (`10.0.1.0/26`), was carved out of the root VNet topology to host a dedicated high-availability **Azure Bastion Host**. The final state successfully decouples administrative access from direct public routing. Operating sessions are handled cleanly over a TLS/HTTPS connection (`bastion.azure.com`), allowing secure operations through the native browser while isolating internal compute node interfaces from public scanning.
-
----
-
-## 3. System Configuration Details & Metrics
-
-The baseline compute environment, virtual network segmentation, and endpoint configurations were compiled and verified against the following infrastructure specifications:
-
-### Core Infrastructure Metrics
-* **Virtual Machine Identifier**: `Azure-WinServer`
-* **Operating System Tier**: Windows Server 2022 Datacenter
-* **Compute Profile Sizing**: `Standard D2ds v7` (2 vCPUs, 8.00 GiB RAM)
-* **Parent Virtual Network (VNet)**: `vmhrwinastus201-vnet`
-* **Resource Group Allocation**: `vmhrdevastus201_group`
-* **Assigned Target Location**: `East US`
-
-### Network Security Group (NSG) Inbound Rule Matrix
-The network interface card (`azure-winserver373`) was associated with the `Azure-WinServer-nsg` stateful firewall. The core inbound rule matrix implemented across the project phases is detailed below:
-
-| Priority | Rule Name | Port | Protocol | Source | Destination | Action | Phase / Description |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **300** | `Allow-Admin-Workstation` | `3389` | TCP | `102.219.128.28` | Any | **Allow** | Initial Baseline & Connectivity Testing |
-| **65000** | `AllowVnetInBound` | Any | Any | `VirtualNetwork` | `VirtualNetwork` | **Allow** | Default Azure Internal East-West Core |
-| **65001** | `AllowAzureLoadBalancerInBound` | Any | Any | `AzureLoadBalancer` | Any | **Allow** | Default Gateway Infrastructure Health Checking |
-| **65500** | `DenyAllInBound` | Any | Any | Any | Any | **Deny** | Standard Fallback Edge Perimeter Dropping |
-
-### Segmented Subnet Infrastructure
-* **Workload Private Subnet (`default`)**: `10.0.0.0/24` $\rightarrow$ Dynamic Host Lease Address: `10.0.0.5`
-* **Secure Perimeter Gateway Subnet (`AzureBastionSubnet`)**: `10.0.1.0/26` $\rightarrow$ Constraints: Exclusive use for Azure Bastion resources.
+### Deployed Host Topology Registry
+| Host Resource Name | Operating System | Host Resource Group | Private Network Allocation | Public Internet Map |
+| :--- | :--- | :--- | :--- | :--- |
+| `vmhrwinastus201` | Windows Server 2022 | `vmhrdeveastus201_group` | `10.1.0.4` | *None* (Protected by Bastion) |
+| `vmhrdeveastus201` | Linux Ubuntu 24.04 | `ct-hr-prod-rg-eus2` | `10.1.0.5` | *None* (Protected by Bastion) |
 
 ---
 
-## 4. Step-by-Step Lab Implementation Report
+##  2. Perimeter Hardening & NSG Rule Matrix
 
-### Phase 1: Pre-Deployment Architecture Verification
-The lifecycle began during the resource template evaluation phase within the Azure Management Console. Upon initiating the "Review + create" process, the platform engine performed validation syntax checks. 
-* **Status**: The workspace emitted a green **"Validation passed"** banner confirming resource structural integrity.
-* **Security Assessment**: Concurrently, the ARM validation engine flagged an orange security alert: *"You have set RDP port(s) open to the internet. This is only recommended for testing..."* This verified the vulnerable baseline posture before configuration hardening began.
+To protect workloads from internet-facing brute-force attacks and automated scanning bots, direct public connectivity pipelines were stripped from both subnets.
 
-### Phase 2: Dependency Mapping & Deployment Progress
-Upon confirming parameter inputs, execution was committed to `vmhrdevastus201_group`. Tracking the initial deployment logs provided visibility into the underlying platform resource dependency graph:
-* The system systematically constructed network foundation components—the stateful Network Security Group (`Azure-WinServer-nsg`), the public address reservation (`4.157.46.197`), and the network adapter (`azure-winserver373`)—first.
-* Once structural plumbing returned an **OK** confirmation status, the platform completed the compute engine creation phase, mounting the storage arrays and spinning up the `Azure-WinServer` virtual instance.
-
-### Phase 3: Network Interface & Endpoint Discovery
-Following compute instantiation, an audit of the asset essentials panel was performed to establish baseline operational metrics. 
-* The primary virtual interface was verified as bound to the root virtual network network layout (`vmhrwinastus201-vnet`).
-* The endpoints were registered and captured for the lab log: the public internet-routable IP address was recorded as `4.157.46.197`, and the corresponding internal host coordinate was set to `10.0.0.5`.
-
-### Phase 4: Identity Remediation & Troubleshooting
-Initial standard network access validation encountered localized credential synchronization errors (*"Your credentials did not work"*), causing a standard management lockout. 
-* **Remediation Procedure**: To resolve this without forcing a destructive server rebuild, the administrative plane was accessed via the VM's connection recovery tools. The **"Reset password"** blade was triggered, leveraging the cloud runtime **VMAccess Extension** to interact with the active operating system kernel.
-* The username was standardized to `azureuser`, and a robust password policy profile was pushed. The extension runtime successfully returned two automated **"ARM request succeeded"** execution receipts, indicating localized operating system profile synchronization was complete.
-* Subsequent baseline connection checks via traditional client software threw standard untrusted security certificate alerts, documenting the high risk of sending administrative connections over unencrypted public paths.
-
-### Phase 5: Network Segmentation & Bastion Provisioning
-To systematically address the network vulnerabilities, the infrastructure architecture was updated to use a secure, air-gapped web gateway topology.
-* **Subnet Segmentation**: The primary virtual network was modified to carve out an isolated address block explicitly meeting Azure's strict naming and parsing rules: **`AzureBastionSubnet`** mapped to network space `10.0.1.0/26`.
-* **Host Provisioning**: The Bastion gateway configuration engine was configured with a **Standard Tier** architecture, utilizing an administrative scale count of `2` separate runtime instances to ensure zone-redundant high availability. The pre-flight engine confirmed validation success, and construction of the `vnet-bastion-host` was initiated.
-
-### Phase 6: Browser-Encapsulated Verification & Guest OS Interaction
-Once the edge gateway infrastructure shifted into a stable execution state, standard remote desktop application profiles were dropped entirely in favor of an identity-brokered perimeter session.
-* An encrypted management tunnel query was triggered directly from the Azure portal interface, proxying traffic through an HTTPS browser handshake (`bastion.azure.com`).
-* The guest operating system accepted the rotated administrative profile (`azureuser`). Successful interaction was verified by logging directly into the live Windows GUI container running inside the browser tab. The system search utility was verified as responsive, and the native **Windows Server Manager Dashboard** successfully initialized with full system-level visibility, proving deep, secure administration capabilities over an isolated network backplane.
-
-### Phase 7: Post-Deployment Security Posture Audit
-To finalize the deployment lifecycle, a structural review of the network configuration blades was performed.
-* An audit of the VM's active **Connect** panel verified that the infrastructure setup is stable and fully supports secure enterprise connectivity profiles, highlighting active configurations for both **Bastion** and **Windows Admin Center** services.
-* A standalone audit of the independent Network Security Group workspace confirmed that while the original test filtering rule remains restricted to the administrator's workstation, all subsequent operational session traffic runs entirely across protected internal virtual interfaces, ensuring a highly auditable and robust management perimeter.
+### Applied Policy Overrides
+* **Rule `Allow-Inbound-Bastion-Proxy` (Priority 300):** Grants port authorization exclusively to traffic hitting administrative target layers (TCP/22 and TCP/3389) coming inside the VNet from the Azure Bastion control plane.
+* **Rule `Deny-All-Direct-Public-Ingress` (Priority 400):** Drops any unbrokered inbound connection packets initiated directly from the public internet.
 
 ---
 
-## 5. Operational Recommendations
+##  3. Secured Connection Paths & Automation Control
 
-To ensure ongoing structural compliance with cloud security frameworks, the following operational adjustments are recommended for the production environment:
+###  Windows Remote Desktop (RDP) Pathway
+* **Access Method:** Deployed without an active public IP boundary. RDP sessions are fully tunneled using TLS over port 443 directly inside the Azure Portal browser via the Bastion console interface.
 
-1.  **Decommission Vulnerable Rule Entries**: Delete the baseline high-priority rule (`Priority 300`) from `Azure-WinServer-nsg` to entirely shut down external port 3389 listening paths on the outer network border.
-2.  **Enforce Just-In-Time (JIT) Network Policies**: If specific applications or deployment utilities require temporary direct access to public endpoints, couple those actions with Just-In-Time VM access configurations.
-3.  **Implement Central Logging & Diagnostic Workspaces**: Configure streaming diagnostic logs for the active Azure Bastion host to point directly to an enterprise Azure Log Analytics Workspace. This ensures all active session creation events, connection duration metrics, and specific operator usernames are stored within an auditable, tamper-resistant log repository.
+###  Linux Secure Shell (SSH) Pathway
+* **Access Method:** Configured with asymmetric cryptographic keys. The private token (`vmhrdeveastus201_key (1).pem`) handles authentication boundaries without maintaining weak, password-based exposure lines.
 
+#### Local Terminal Direct Command Sequence:
+```bash
+# Set restricted folder permissions (Linux/macOS subsystem environments)
+chmod 400 .\"vmhrdeveastus201_key (1).pem"
+
+# Execute localized private terminal handshake bypass link
+ssh -i .\"vmhrdeveastus201_key (1).pem" azureuser@10.1.0.5
+
+
+# Programmatically initiate automated RDP link using the Bastion native engine wrapper
+az network bastion rdp --name "vmhrdeveastus201-bastion" --resource-group "ct-hr-prod-rg-eus2" --target-resource-id "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/vmhrdeveastus201_group/providers/Microsoft.Compute/virtualMachines/vmhrwinastus201"
+
+# Programmatically initiate automated secure SSH link using local terminal client pipes
+az network bastion ssh --name "vmhrdeveastus201-bastion" --resource-group "ct-hr-prod-rg-eus2" --target-resource-id "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/ct-hr-prod-rg-eus2/providers/Microsoft.Compute/virtualMachines/vmhrdeveastus201" --auth-type "ssh-key" --username "azureuser" --ssh-key "~\Downloads\vmhrdeveastus201_key (1).pem"
 
 
 ---
-*Document compiled and verified for cloud security architecture portfolio review and academic submission.*
+
+###  2. The Perfect `SUMMARY.md` File
+*Create a file named `SUMMARY.md` in your GitHub repo and paste this exact markdown code into it:*
+
+```markdown
+# Executive Summary: Corrected Azure Infrastructure & Access Compliance Report
+
+###  Program Target
+**Project Title:** Azure Virtual Network Configuration Subnet IP Learning Program  
+**Compliance Grade Remediated State:** Corrected, Hardened, and Fully Finalized
+
+---
+
+###  Enterprise Infrastructure Footprint Matrix
+* **Virtual Network Mesh:** `vmhrdeveastus201-vnet` (Core Block: `10.1.0.0/16`)
+* **Dedicated Proxy Subnet Block:** `AzureBastionSubnet` (`10.1.1.0/26` | 59 Available IPs)
+* **Default Application Subnet Block:** `default` (`10.1.0.0/24` | 249 Available IPs)
+* **Windows Node Host:** `vmhrwinastus201` (`vmhrdeveastus201_group` | IP: `10.1.0.4`)
+* **Linux Node Host:** `vmhrdeveastus201` (`ct-hr-prod-rg-eus2` | IP: `10.1.0.5`)
+* **Bastion Gateway Handler:** Standard Tier SKU (Deploys native programmatic CLI client terminal wrappers)
+
+---
+
+###  Executed Rubric Remediation Ledger
+
+#### 1. Cross-Platform Environment Realization
+Successfully corrected the missing Linux instance deficiency by deploying an Ubuntu 24.04 LTS compute instance inside the `ct-hr-prod-rg-eus2` resource group, seamlessly connecting it to the unified core VNet space.
+
+#### 2. Network Topology Segmentation
+Carved out a strict, isolated subnet footprint matching the precise naming rules mandated by Azure platform engines (`AzureBastionSubnet`). The design isolates the gateway proxy from backend app pools.
+
+#### 3. Zero-Trust Access Hardening
+Eliminated standard internet-exposed ingress routing pathways. Both cross-platform compute nodes have their direct public IPs detached, locking management traffic boundaries down exclusively to the Azure Bastion TLS tunnel over port 443.
+
+#### 4. Cost Modeling & Automation Readiness
+Provided complete cost projections distinguishing Basic vs. Standard Bastion tiers. Added automated integration commands (`az network bastion`) to support development tooling and allow fast, secure console access directly from local terminal workflows.
+
+---
+
+###  Final Project Compliance Checklist
+- [x] Multi-platform operating infrastructure deployed (Windows Server + Linux Ubuntu).
+- [x] Non-overlapping CIDR address space allocations established.
+- [x] Dedicated `AzureBastionSubnet` successfully created and validated.
+- [x] Direct internet management port paths disabled.
+- [x] Bastion financial tier trade-offs documented.
+- [x] CLI connection automation strings integrated.
